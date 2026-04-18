@@ -39,7 +39,7 @@ class Construction:
 
 
 class GameClient:
-    def __init__(self, token: str, timeout: float = 10.0):
+    def __init__(self, token: str, timeout: float = 3.0):
         self.token = token
         self.timeout = timeout
         self.session = requests.Session()
@@ -547,8 +547,6 @@ class Strategy:
 
         self.expander.cleanup_failed_targets(state.turn_i)
         self.expander.update_origin(state.main_pos)
-        state = GameState(arena)
-        builder = CommandBuilder(self.max_commands_per_turn)
 
         self.expander.cleanup_failed_targets(state.turn_i)
         self.expander.update_origin(state.main_pos)
@@ -611,10 +609,22 @@ class Strategy:
             # Сортируем кандидатов: сначала бонусные клетки
             def candidate_score(pos):
                 score = 0
+
                 if Geometry.is_bonus(pos[0], pos[1]):
                     score += 1000
-                # Предпочитаем клетки ближе к центру карты
-                score -= Geometry.chebyshev(pos, (state.w // 2, state.h // 2)) * 0.1
+
+                # центр карты
+                score -= Geometry.chebyshev(pos, (state.w // 2, state.h // 2)) * 0.3
+
+                # избегаем опасности
+                if state.is_dangerous(pos):
+                    score -= 2000
+
+                # ближе к врагам — агрессивнее
+                if state.enemies:
+                    d = min(Geometry.chebyshev(pos, e.pos) for e in state.enemies)
+                    score -= d * 0.5
+
                 return score
 
             candidates.sort(key=candidate_score, reverse=True)
@@ -794,7 +804,6 @@ def run_bot(token: str, seed: int | None = None, max_turns: int | None = None, l
             _sleep_until(deadline)
             continue
 
-        payload = strat.make_payload(arena)
         try:
             resp = client.post_command(payload)
         except requests.HTTPError as e:
@@ -810,7 +819,6 @@ def run_bot(token: str, seed: int | None = None, max_turns: int | None = None, l
                 backoff_mult = min(8.0, backoff_mult * 1.3)
                 backoff_s = 0.6 * backoff_mult
             print(f"HTTP error on command: {text[:300]}", file=sys.stderr)
-            sent_for_turn = last_turn
             continue
         except Exception as e:
             print(f"Error on command: {e}", file=sys.stderr)
