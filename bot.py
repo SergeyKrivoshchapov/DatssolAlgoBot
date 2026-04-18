@@ -39,7 +39,7 @@ class Construction:
 
 
 class GameClient:
-    def __init__(self, token: str, timeout: float = 3.0):
+    def __init__(self, token: str, timeout: float = 10.0):
         self.token = token
         self.timeout = timeout
         self.session = requests.Session()
@@ -91,21 +91,12 @@ class Geometry:
         return [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
 
     @staticmethod
-    def neighbors8(pos: tuple[int, int]) -> list[tuple[int, int]]:
-        x, y = pos
-        return [(x + dx, y + dy) for dx in [-1, 0, 1] for dy in [-1, 0, 1] if not (dx == 0 and dy == 0)]
-
-    @staticmethod
     def inside(pos: tuple[int, int], w: int, h: int) -> bool:
         return 0 <= pos[0] < w and 0 <= pos[1] < h
 
     @staticmethod
     def is_adjacent_4(a: tuple[int, int], b: tuple[int, int]) -> bool:
         return Geometry.manhattan(a, b) == 1
-
-    @staticmethod
-    def is_adjacent_8(a: tuple[int, int], b: tuple[int, int]) -> bool:
-        return Geometry.chebyshev(a, b) == 1
 
     @staticmethod
     def in_range(src: tuple[int, int], dst: tuple[int, int], r: int) -> bool:
@@ -132,13 +123,6 @@ class GameState:
         self.enemies = self._parse_enemies()
         self.occupied = self._build_occupied()
         self.earthquake_imminent = self._check_earthquake()
-        self.danger_zones = self._parse_danger_zones()
-
-    def is_dangerous(self, pos: tuple[int, int]) -> bool:
-        for center, radius, turns in self.danger_zones:
-            if Geometry.in_range(pos, center, radius):
-                return True
-        return False
 
     def _parse_size(self, arena: dict) -> tuple[int, int]:
         size = arena.get("size") or [0, 0]
@@ -283,37 +267,29 @@ class GameState:
             t = tiers.get(name) or {}
             return int(t.get("current", 0) or 0), int(t.get("max", 0) or 0)
 
-        # ===== ПРИОРИТЕТЫ =====
-        # 1. СКОРОСТЬ СТРОЙКИ/РЕМОНТА (repair_power) — КРИТИЧНО
-        # 2. ЗАЩИТА ОТ ЗЕМЛЕТРЯСЕНИЙ (earthquake_mitigation)
-        # 3. МАКСИМАЛЬНОЕ HP (max_hp)
-        # 4. Всё остальное
-
-        # Группа 1: Скорость стройки/ремонта (максимум 3 улучшения)
-        repair_c, repair_m = cur("repair_power")
-        if repair_m > 0 and repair_c < repair_m and repair_c < 3:
+        # Простые приоритеты
+        c, m = cur("repair_power")
+        if m > 0 and c < 2:
             return "repair_power"
 
-        # Группа 2: Защита от землетрясений (максимум 3 улучшения)
-        earthquake_c, earthquake_m = cur("earthquake_mitigation")
-        if earthquake_m > 0 and earthquake_c < earthquake_m and earthquake_c < 3:
+        c, m = cur("earthquake_mitigation")
+        if m > 0 and c < 1:
             return "earthquake_mitigation"
 
-        # Группа 3: Максимальное HP (максимум 5 улучшений)
-        hp_c, hp_m = cur("max_hp")
-        if hp_m > 0 and hp_c < hp_m and hp_c < 5:
+        c, m = cur("max_hp")
+        if m > 0 and c < 1:
             return "max_hp"
 
-        # Группа 4: Остальные апгрейды
-        remaining = [
-            "signal_range",
-            "settlement_limit",
-            "decay_mitigation",
-            "vision_range",
-            "beaver_damage_mitigation"
-        ]
+        c, m = cur("signal_range")
+        if m > 0 and c < 1:
+            return "signal_range"
 
-        for name in remaining:
+        c, m = cur("settlement_limit")
+        if m > 0 and c < m:
+            return "settlement_limit"
+
+        for name in ["repair_power", "earthquake_mitigation", "max_hp", "signal_range", "decay_mitigation",
+                     "vision_range"]:
             c, m = cur(name)
             if m > 0 and c < m:
                 return name
@@ -331,30 +307,6 @@ class GameState:
             return False
         return True
 
-    def is_adjacent_to_network(self, target: tuple[int, int]) -> bool:
-        if not self.active_positions:
-            return False
-        return any(Geometry.is_adjacent_4(target, ap) for ap in self.active_positions)
-
-    def _parse_danger_zones(self):
-        zones = []
-        meteo = self.arena.get("meteoForecasts") or []
-
-        for m in meteo:
-            if not isinstance(m, dict):
-                continue
-
-            # берём будущую позицию
-            pos = self._pos_to_tuple(m.get("nextPosition") or m.get("position"))
-            if not pos:
-                continue
-
-            radius = int(m.get("radius", 0) or 0)
-            turns = int(m.get("turnsUntil", 1) or 1)
-
-            zones.append((pos, radius, turns))
-
-        return zones
 
 class CommandBuilder:
     def __init__(self, max_commands: int):
@@ -405,280 +357,142 @@ class CommandBuilder:
         return True
 
 
-class CrossExpander:
-    def __init__(self):
-        self.cross_origin: tuple[int, int] | None = None
-        self.ray_next_k: dict[str, int] = {"N": 1, "E": 1, "S": 1, "W": 1}
-        self.recent_failed_targets: dict[tuple[int, int], int] = {}
-        self.max_failed_target_age = 8
-
-    def update_origin(self, main_pos: tuple[int, int] | None):
-        if main_pos is not None:
-            self.cross_origin = main_pos
-
-    def cleanup_failed_targets(self, turn_i: int | None):
-        if turn_i is None:
-            return
-        for pos, t in list(self.recent_failed_targets.items()):
-            if (turn_i - t) > self.max_failed_target_age:
-                del self.recent_failed_targets[pos]
-
-    def _ring_positions(self, origin: tuple[int, int], r: int, w: int, h: int) -> list[tuple[int, int]]:
-        if r <= 0:
-            return []
-        ox, oy = origin
-        res = []
-        x0, x1 = ox - r, ox + r
-        y0, y1 = oy - r, oy + r
-
-        for x in range(x0, x1 + 1):
-            if Geometry.inside((x, y0), w, h):
-                res.append((x, y0))
-        for y in range(y0 + 1, y1 + 1):
-            if Geometry.inside((x1, y), w, h):
-                res.append((x1, y))
-        for x in range(x1 - 1, x0 - 1, -1):
-            if Geometry.inside((x, y1), w, h):
-                res.append((x, y1))
-        for y in range(y1 - 1, y0, -1):
-            if Geometry.inside((x0, y), w, h):
-                res.append((x0, y))
-
-        seen, uniq = set(), []
-        for p in res:
-            if p not in seen:
-                uniq.append(p)
-                seen.add(p)
-        return uniq
-
-    def _ray_target(self, origin: tuple[int, int], direction: str, k: int) -> tuple[int, int] | None:
-        ox, oy = origin
-        if k <= 0:
-            return None
-        if direction == "N":
-            return ox, oy - k
-        if direction == "S":
-            return ox, oy + k
-        if direction == "E":
-            return ox + k, oy
-        if direction == "W":
-            return ox - k, oy
-        return None
-
-    def get_candidates(self, origin: tuple[int, int], w: int, h: int) -> list[tuple[int, int]]:
-        res = self._ring_positions(origin, 1, w, h)
-        for d in ("N", "E", "S", "W"):
-            t = self._ray_target(origin, d, self.ray_next_k.get(d, 1))
-            if t is not None and Geometry.inside(t, w, h):
-                res.append(t)
-        return res
-
-    def advance_ray(self, origin: tuple[int, int], target: tuple[int, int]):
-        if Geometry.chebyshev(target, origin) == 1:
-            return
-        for d in ("N", "E", "S", "W"):
-            k = self.ray_next_k.get(d, 1)
-            if self._ray_target(origin, d, k) == target:
-                self.ray_next_k[d] = k + 1
-                break
-
-    def mark_failed(self, target: tuple[int, int], turn_i: int | None):
-        self.recent_failed_targets[target] = turn_i if turn_i is not None else 0
-
-
 class Strategy:
     def __init__(self, seed: int | None = None):
-        self.last_known_main_pos: tuple[int, int] | None = None
         self.rng = random.Random(seed)
-        self.max_commands_per_turn = 8
-        self.max_builds_per_turn = 3
+        self.max_commands_per_turn = 15
         self.last_relocate_turn: int | None = None
-        self.expander = CrossExpander()
-        self.consecutive_empty_turns = 0
+        self.last_known_main_pos: tuple[int, int] | None = None
+        self.focus_target: tuple[int, int] | None = None
+        self.focus_streak: int = 0  # Сколько ходов строим одну цель
 
-    def _find_build_pair(self, state: GameState, target: tuple[int, int], builder: CommandBuilder) -> tuple[Plantation, Plantation] | None:
-        """Найти пару (author, exit) для стройки/атаки target"""
-        if not state.active_plantations:
-            return None
-
-        # Ищем плантации, которые могут дотянуться до цели через AR
-        valid_exits = []
-        for p in state.active_plantations:
-            if Geometry.in_range(p.pos, target, state.ar) and p.id not in builder.used_authors:
-                valid_exits.append(p)
-
-        if not valid_exits:
-            return None
-
-        # Сортируем: сначала ближайшие к цели, потом с большим HP
-        valid_exits.sort(key=lambda p: (Geometry.chebyshev(p.pos, target), -p.hp))
-
-        # Используем одну и ту же плантацию как author и exit
-        return valid_exits[0], valid_exits[0]
-
-    def _repair_candidates(self, state: GameState, target: Plantation, builder: CommandBuilder) -> list[tuple[Plantation, Plantation]]:
-        """Найти кандидатов для ремонта target"""
-        cands = []
-        for p in state.active_plantations:
-            if p.id == target.id:
-                continue
-            if p.id in builder.used_authors:
-                continue
-            if not Geometry.in_range(p.pos, target.pos, state.ar):
-                continue
-            cands.append((p, p))
-        cands.sort(key=lambda x: (-x[0].hp, Geometry.chebyshev(x[0].pos, target.pos)))
-        return cands
+    def _get_frontier(self, state: GameState) -> list[tuple[int, int]]:
+        """Все свободные клетки, соседние с нашей сетью"""
+        front = set()
+        for pos in state.active_positions:
+            for nb in Geometry.neighbors4(pos):
+                if state.is_free_cell(nb):
+                    front.add(nb)
+        return list(front)
 
     def make_payload(self, arena: dict) -> dict:
         state = GameState(arena)
         builder = CommandBuilder(self.max_commands_per_turn)
 
-        # ===== ОБНАРУЖЕНИЕ РЕСПАВНА =====
+        # === СБРОС ПРИ РЕСПАВНЕ ===
         if self.last_known_main_pos is not None and state.main_pos != self.last_known_main_pos:
-            # Проверяем, был ли это плановый перенос
             if self.last_relocate_turn != state.turn_i:
-                print(f"[Turn {state.turn_i}] RESPAWN DETECTED! Resetting state.", file=sys.stderr)
-                # ПОЛНЫЙ СБРОС
-                self.expander = CrossExpander()
                 self.last_relocate_turn = None
-                self.consecutive_empty_turns = 0
+                self.focus_target = None
+                self.focus_streak = 0
         self.last_known_main_pos = state.main_pos
 
-        self.expander.cleanup_failed_targets(state.turn_i)
-        self.expander.update_origin(state.main_pos)
-
-        self.expander.cleanup_failed_targets(state.turn_i)
-        self.expander.update_origin(state.main_pos)
-
-        builds_done = 0
-
-        # 1. Продолжить существующие стройки
+        # === 1. ПРОДОЛЖИТЬ НЕЗАВЕРШЁННЫЕ СТРОЙКИ (ВЫСШИЙ ПРИОРИТЕТ) ===
+        # Это предотвращает деградацию
         if state.constructions:
             for con in sorted(state.constructions, key=lambda c: -c.progress):
-                if builds_done >= self.max_builds_per_turn:
+                if not builder.can_add():
                     break
                 if con.progress < 50:
-                    pair = self._find_build_pair(state, con.pos, builder)
-                    if pair and builder.add_build(pair[0], pair[1], con.pos):
-                        builds_done += 1
+                    # Назначаем ВСЕХ, кто может достать
+                    for p in state.active_plantations:
+                        if not builder.can_add():
+                            break
+                        if p.id in builder.used_authors:
+                            continue
+                        if Geometry.in_range(p.pos, con.pos, state.ar):
+                            builder.add_build(p, p, con.pos)
 
-        # 2. Ремонт ЦУ (критический приоритет)
-        if state.main_plantation and state.main_plantation.hp < 35:
-            for author, exit_p in self._repair_candidates(state, state.main_plantation, builder):
-                if builder.add_repair(author, exit_p, state.main_plantation):
+            # Если есть стройки — ВСЁ, больше ничего не делаем в этом ходу (кроме ремонта ЦУ)
+            # Это гарантирует, что стройки не деградируют
+
+        # === 2. РЕМОНТ ЦУ (КРИТИЧНО) ===
+        if state.main_plantation and state.main_plantation.hp < 40:
+            for p in state.active_plantations:
+                if not builder.can_add():
                     break
+                if p.id == state.main_plantation.id:
+                    continue
+                if p.id in builder.used_authors:
+                    continue
+                if Geometry.in_range(p.pos, state.main_plantation.pos, state.ar):
+                    builder.add_repair(p, p, state.main_plantation)
 
-        # 3. Ремонт остальных плантаций
-        hp_threshold = 20 if state.earthquake_imminent else 40
-        low_hp = sorted(
-            [p for p in state.plantations if p.hp < hp_threshold and not p.is_main],
-            key=lambda p: p.hp
-        )
-        for p in low_hp:
+        # === 3. ЕСЛИ СТРОЕК НЕТ — ВЫБИРАЕМ НОВУЮ ЦЕЛЬ ===
+        if not state.constructions and builder.can_add():
+            # Если есть фокус и он всё ещё свободен — продолжаем его
+            if self.focus_target and state.is_free_cell(self.focus_target):
+                self.focus_streak += 1
+            else:
+                # Выбираем новую цель
+                frontier = self._get_frontier(state)
+                if frontier:
+                    # Сортируем: сначала соседи ЦУ (чтобы построить Кольцо), потом бонусные
+                    if state.main_pos:
+                        frontier.sort(key=lambda pos: (
+                            -Geometry.is_bonus(pos[0], pos[1]),
+                            Geometry.chebyshev(pos, state.main_pos)
+                        ))
+                    self.focus_target = frontier[0]
+                    self.focus_streak = 0
+
+            # Строим выбранную цель ВСЕМИ силами
+            if self.focus_target and state.is_free_cell(self.focus_target):
+                for p in state.active_plantations:
+                    if not builder.can_add():
+                        break
+                    if p.id in builder.used_authors:
+                        continue
+                    if Geometry.in_range(p.pos, self.focus_target, state.ar):
+                        builder.add_build(p, p, self.focus_target)
+
+        # === 4. РЕМОНТ ОСТАЛЬНЫХ (только если остались команды) ===
+        low_hp = sorted([p for p in state.plantations if p.hp < 30 and not p.is_main], key=lambda x: x.hp)
+        for target in low_hp:
             if not builder.can_add():
                 break
-            for author, exit_p in self._repair_candidates(state, p, builder):
-                if builder.add_repair(author, exit_p, p):
-                    break
+            for p in state.active_plantations:
+                if p.id == target.id:
+                    continue
+                if p.id in builder.used_authors:
+                    continue
+                if Geometry.in_range(p.pos, target.pos, state.ar):
+                    if builder.add_repair(p, p, target):
+                        break
 
-        # 4. Атака бобров (если они слабые или близко)
-        for b in sorted(state.beavers, key=lambda x: x.hp):
+        # === 5. АТАКА БОБРОВ (если есть свободные плантации) ===
+        for b in state.beavers:
             if not builder.can_add():
                 break
-            # Атакуем только если можем нанести значительный урон или добить
-            if b.hp < 50 or Geometry.chebyshev(b.pos, state.main_pos or (0, 0)) <= 3:
-                pair = self._find_build_pair(state, b.pos, builder)
-                if pair:
-                    builder.add_attack(pair[0], pair[1], b.pos)
+            if b.hp < 50 and Geometry.chebyshev(b.pos, state.main_pos or (0, 0)) <= 3:
+                for p in state.active_plantations:
+                    if not builder.can_add():
+                        break
+                    if p.id in builder.used_authors:
+                        continue
+                    if Geometry.in_range(p.pos, b.pos, state.ar):
+                        builder.add_attack(p, p, b.pos)
 
-        # 5. Атака врагов (только ослабленных)
-        for e in sorted(state.enemies, key=lambda x: x.hp):
-            if not builder.can_add():
-                break
-            if e.hp < 30:  # Атакуем только если враг почти мёртв
-                pair = self._find_build_pair(state, e.pos, builder)
-                if pair:
-                    builder.add_attack(pair[0], pair[1], e.pos)
-
-        # 6. Экспансия Креста
-        build_budget = max(0, min(self.max_builds_per_turn - builds_done, self.max_commands_per_turn - len(builder.cmd)))
-        if state.plantations and build_budget > 0 and self.expander.cross_origin:
-            candidates = self.expander.get_candidates(self.expander.cross_origin, state.w, state.h)
-
-            # Сортируем кандидатов: сначала бонусные клетки
-            def candidate_score(pos):
-                score = 0
-
-                if Geometry.is_bonus(pos[0], pos[1]):
-                    score += 1000
-
-                # центр карты
-                score -= Geometry.chebyshev(pos, (state.w // 2, state.h // 2)) * 0.3
-
-                # избегаем опасности
-                if state.is_dangerous(pos):
-                    score -= 2000
-
-                # ближе к врагам — агрессивнее
-                if state.enemies:
-                    d = min(Geometry.chebyshev(pos, e.pos) for e in state.enemies)
-                    score -= d * 0.5
-
-                return score
-
-            candidates.sort(key=candidate_score, reverse=True)
-
-            built = 0
-            for target in candidates:
-                if built >= build_budget:
-                    break
-                if target in self.expander.recent_failed_targets:
-                    continue
-                if not state.is_free_cell(target):
-                    continue
-                if not state.is_adjacent_to_network(target):
-                    continue
-
-                pair = self._find_build_pair(state, target, builder)
-                if not pair:
-                    self.expander.mark_failed(target, state.turn_i)
-                    continue
-                if state.is_dangerous(target):
-                    self.expander.mark_failed(target, state.turn_i)
-                    continue
-                if builder.add_build(pair[0], pair[1], target):
-                    built += 1
-                    self.expander.advance_ray(self.expander.cross_origin, target)
-
-        # 7. Перенос ЦУ
+        # === 6. ПЕРЕНОС ЦУ (простой) ===
         relocate_main = []
         if state.main_pos and state.turn_i:
             main_prog = state.cells_progress.get(state.main_pos, 0)
-            is_critical = main_prog >= 50
-            is_time = main_prog >= 35 and (self.last_relocate_turn is None or (state.turn_i - self.last_relocate_turn) >= 12)
+            if main_prog >= 50:
+                for nb in Geometry.neighbors4(state.main_pos):
+                    cand = None
+                    for p in state.active_plantations:
+                        if p.pos == nb:
+                            cand = p
+                            break
+                    if cand:
+                        relocate_main = [
+                            [state.main_pos[0], state.main_pos[1]],
+                            [cand.pos[0], cand.pos[1]]
+                        ]
+                        self.last_relocate_turn = state.turn_i
+                        self.focus_target = None
+                        break
 
-            if state.is_dangerous(state.main_pos):
-                is_critical = True
-
-            if is_critical or is_time:
-                # Ищем соседние плантации для переноса
-                rel_cands = [
-                    p for p in state.active_plantations
-                    if p.pos != state.main_pos
-                    and Geometry.is_adjacent_4(p.pos, state.main_pos)
-                    and state.cells_progress.get(p.pos, 0) < 50
-                ]
-                if rel_cands:
-                    best = min(rel_cands, key=lambda p: state.cells_progress.get(p.pos, 100))
-                    relocate_main = [
-                        [state.main_pos[0], state.main_pos[1]],
-                        [best.pos[0], best.pos[1]]
-                    ]
-                    self.last_relocate_turn = state.turn_i
-                    print(f"[Turn {state.turn_i}] Relocating MAIN from {state.main_pos} (prog {main_prog}%) to {best.pos}", file=sys.stderr)
-
-        # Если команд нет, но есть очки апгрейда — используем их
         upgrade = state.get_upgrade_choice()
         if not builder.cmd and not relocate_main and upgrade:
             return {"command": [], "plantationUpgrade": upgrade, "relocateMain": []}
@@ -688,7 +502,6 @@ class Strategy:
             "plantationUpgrade": upgrade,
             "relocateMain": relocate_main
         }
-
 
 def _extract_err_code(resp_text: str) -> int | None:
     try:
@@ -742,24 +555,14 @@ def run_bot(token: str, seed: int | None = None, max_turns: int | None = None, l
         try:
             arena = client.get_arena()
         except requests.HTTPError as e:
-            text = ""
-            try:
-                text = e.response.text
-            except Exception:
-                text = str(e)
+            text = getattr(e, "response", type("", (), {"text": str(e)})()).text if hasattr(e, "response") else str(e)
             code = _extract_err_code(text)
-            if code == 24:
-                backoff_mult = min(8.0, backoff_mult * 1.5)
-                backoff_s = 1.0 * backoff_mult
-            else:
-                backoff_mult = min(8.0, backoff_mult * 1.2)
-                backoff_s = 0.6 * backoff_mult
-            print(f"HTTP error on arena: {text[:300]}", file=sys.stderr)
+            backoff_mult = min(8.0, backoff_mult * (1.5 if code == 24 else 1.2))
+            backoff_s = 1.0 if code == 24 else 0.6
             continue
-        except Exception as e:
+        except Exception:
             backoff_mult = min(8.0, backoff_mult * 1.2)
-            backoff_s = 0.6 * backoff_mult
-            print(f"Error on arena: {e}", file=sys.stderr)
+            backoff_s = 0.6
             continue
 
         turn_no = arena.get("turnNo")
@@ -768,12 +571,7 @@ def run_bot(token: str, seed: int | None = None, max_turns: int | None = None, l
         except Exception:
             turn_no_i = None
 
-        next_turn_in = arena.get("nextTurnIn", 0.5)
-        try:
-            next_turn_in = float(next_turn_in)
-        except Exception:
-            next_turn_in = 0.5
-        next_turn_in = max(0.0, next_turn_in)
+        next_turn_in = max(0.0, float(arena.get("nextTurnIn", 0.5)))
         backoff_mult = 1.0
 
         if turn_no_i is None:
@@ -790,40 +588,30 @@ def run_bot(token: str, seed: int | None = None, max_turns: int | None = None, l
                 last_logs_turn = turn_no_i
                 try:
                     logs = client.get_logs()
-                    if isinstance(logs, list) and logs:
+                    if logs:
                         last_msg = logs[-1]
-                        if isinstance(last_msg, dict):
-                            msg = last_msg.get("message", "")
-                            if msg:
-                                print(msg)
+                        if isinstance(last_msg, dict) and last_msg.get("message"):
+                            print(last_msg["message"])
                 except Exception:
                     pass
 
         if sent_for_turn == last_turn:
-            deadline = time.monotonic() + max(0.0, next_turn_in + 0.02)
-            _sleep_until(deadline)
+            _sleep_until(time.monotonic() + next_turn_in + 0.02)
             continue
 
+        payload = strat.make_payload(arena)
         try:
             resp = client.post_command(payload)
         except requests.HTTPError as e:
-            try:
-                text = e.response.text
-            except Exception:
-                text = str(e)
+            text = getattr(e, "response", type("", (), {"text": str(e)})()).text if hasattr(e, "response") else str(e)
             code = _extract_err_code(text)
-            if code == 24:
-                backoff_mult = min(8.0, backoff_mult * 1.8)
-                backoff_s = 1.0 * backoff_mult
-            else:
-                backoff_mult = min(8.0, backoff_mult * 1.3)
-                backoff_s = 0.6 * backoff_mult
-            print(f"HTTP error on command: {text[:300]}", file=sys.stderr)
+            backoff_mult = min(8.0, backoff_mult * (1.8 if code == 24 else 1.3))
+            backoff_s = 1.0 if code == 24 else 0.6
+            sent_for_turn = last_turn
             continue
-        except Exception as e:
-            print(f"Error on command: {e}", file=sys.stderr)
+        except Exception:
             backoff_mult = min(8.0, backoff_mult * 1.3)
-            backoff_s = 0.6 * backoff_mult
+            backoff_s = 0.6
             sent_for_turn = last_turn
             continue
 
@@ -838,13 +626,11 @@ def run_bot(token: str, seed: int | None = None, max_turns: int | None = None, l
                     pass
                 sent_for_turn = last_turn
             else:
-                print(f"Errors: {errors}", file=sys.stderr)
                 sent_for_turn = last_turn
         else:
             sent_for_turn = last_turn
 
-        deadline = time.monotonic() + max(0.0, next_turn_in + 0.02)
-        _sleep_until(deadline)
+        _sleep_until(time.monotonic() + next_turn_in + 0.02)
 
 
 def main():

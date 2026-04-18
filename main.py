@@ -46,12 +46,12 @@ class CoordinatorThread(QThread):
         return {'X-Auth-Token': self.token, 'accept': 'application/json'}
 
     def _get(self, endpoint: str):
-        r = self._session.get(f'https://games-test.datsteam.dev{endpoint}', headers=self._headers(), timeout=10)
+        r = self._session.get(f'https://games.datsteam.dev{endpoint}', headers=self._headers(), timeout=10)
         r.raise_for_status()
         return r.json()
 
     def _post(self, endpoint: str, payload: dict):
-        r = self._session.post(f'https://games-test.datsteam.dev{endpoint}', headers=self._headers(), json=payload, timeout=10)
+        r = self._session.post(f'https://games.datsteam.dev{endpoint}', headers=self._headers(), json=payload, timeout=10)
         r.raise_for_status()
         return r.json()
 
@@ -169,7 +169,7 @@ class GameAPIWorker(QThread):
         try:
             headers = {'X-Auth-Token': self.token, 'accept': 'application/json'}
             response = requests.get(
-                f'https://games-test.datsteam.dev{self.endpoint}',
+                f'https://games.datsteam.dev{self.endpoint}',
                 headers=headers,
                 timeout=10
             )
