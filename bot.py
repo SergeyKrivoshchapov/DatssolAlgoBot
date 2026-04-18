@@ -617,8 +617,8 @@ class Strategy:
         relocate_main = []
         if state.main_pos and state.turn_i:
             main_prog = state.cells_progress.get(state.main_pos, 0)
-            is_critical = main_prog >= 85
-            is_time = main_prog >= 70 and (self.last_relocate_turn is None or (state.turn_i - self.last_relocate_turn) >= 12)
+            is_critical = main_prog >= 50
+            is_time = main_prog >= 45 and (self.last_relocate_turn is None or (state.turn_i - self.last_relocate_turn) >= 12)
 
             if is_critical or is_time:
                 # Ищем соседние плантации для переноса
@@ -627,7 +627,6 @@ class Strategy:
                     if p.pos != state.main_pos
                     and Geometry.is_adjacent_4(p.pos, state.main_pos)
                     and state.cells_progress.get(p.pos, 0) < 50
-                    and p.hp >= 30
                 ]
                 if rel_cands:
                     best = min(rel_cands, key=lambda p: state.cells_progress.get(p.pos, 100))
