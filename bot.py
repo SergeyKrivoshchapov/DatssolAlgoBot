@@ -132,7 +132,14 @@ class GameState:
         self.enemies = self._parse_enemies()
         self.occupied = self._build_occupied()
         self.earthquake_imminent = self._check_earthquake()
+        self.danger_zones = self._parse_danger_zones()
 
+    def is_dangerous(self, pos: tuple[int, int]) -> bool:
+        for center, radius, turns in self.danger_zones:
+            if Geometry.in_range(pos, center, radius):
+                return True
+        return False
+    
     def _parse_size(self, arena: dict) -> tuple[int, int]:
         size = arena.get("size") or [0, 0]
         try:
@@ -329,6 +336,25 @@ class GameState:
             return False
         return any(Geometry.is_adjacent_4(target, ap) for ap in self.active_positions)
 
+    def _parse_danger_zones(self):
+        zones = []
+        meteo = self.arena.get("meteoForecasts") or []
+
+        for m in meteo:
+            if not isinstance(m, dict):
+                continue
+
+            # берём будущую позицию
+            pos = self._pos_to_tuple(m.get("nextPosition") or m.get("position"))
+            if not pos:
+                continue
+
+            radius = int(m.get("radius", 0) or 0)
+            turns = int(m.get("turnsUntil", 1) or 1)
+
+            zones.append((pos, radius, turns))
+
+        return zones
 
 class CommandBuilder:
     def __init__(self, max_commands: int):
@@ -608,7 +634,9 @@ class Strategy:
                 if not pair:
                     self.expander.mark_failed(target, state.turn_i)
                     continue
-
+                if state.is_dangerous(target):
+                    self.expander.mark_failed(target, state.turn_i)
+                    continue
                 if builder.add_build(pair[0], pair[1], target):
                     built += 1
                     self.expander.advance_ray(self.expander.cross_origin, target)
@@ -618,7 +646,10 @@ class Strategy:
         if state.main_pos and state.turn_i:
             main_prog = state.cells_progress.get(state.main_pos, 0)
             is_critical = main_prog >= 50
-            is_time = main_prog >= 45 and (self.last_relocate_turn is None or (state.turn_i - self.last_relocate_turn) >= 12)
+            is_time = main_prog >= 35 and (self.last_relocate_turn is None or (state.turn_i - self.last_relocate_turn) >= 12)
+
+            if state.is_dangerous(state.main_pos):
+                is_critical = True
 
             if is_critical or is_time:
                 # Ищем соседние плантации для переноса
