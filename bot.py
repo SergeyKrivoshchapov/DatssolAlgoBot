@@ -139,7 +139,7 @@ class GameState:
             if Geometry.in_range(pos, center, radius):
                 return True
         return False
-    
+
     def _parse_size(self, arena: dict) -> tuple[int, int]:
         size = arena.get("size") or [0, 0]
         try:
