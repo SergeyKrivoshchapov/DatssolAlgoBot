@@ -92,22 +92,20 @@ class CoordinatorThread(QThread):
                 return payload
         return None
 
+
     def run(self):
-        backoff = 0.0
         while not self._stop:
-            if backoff > 0:
-                time.sleep(backoff)
-                backoff = 0.0
+            # 1. Делаем GET и запоминаем ВРЕМЯ получения ответа
+            request_start = time.monotonic()
 
             try:
                 arena = self._get('/api/arena')
-                if not isinstance(arena, dict):
-                    raise TypeError('arena is not an object')
             except Exception as e:
                 self.error.emit(str(e))
-                backoff = 0.8
+                time.sleep(1.0)
                 continue
 
+            request_end = time.monotonic()
             self.arena_updated.emit(arena)
 
             turn_no = arena.get('turnNo')
@@ -116,10 +114,13 @@ class CoordinatorThread(QThread):
             except Exception:
                 turn_i = None
 
-            if turn_i is not None and (self._last_turn is None or self._last_turn != turn_i):
+            # 2. Если ход сменился — отправляем команду
+            if turn_i is not None and turn_i != self._last_turn:
                 self._last_turn = turn_i
-                need_logs = self.logs_every > 0 and (self._last_logs_turn is None or (turn_i - self._last_logs_turn) >= self.logs_every)
-                if need_logs:
+
+                # Логи раз в 10 ходов
+                if self.logs_every > 0 and (
+                        self._last_logs_turn is None or (turn_i - self._last_logs_turn) >= self.logs_every):
                     self._last_logs_turn = turn_i
                     try:
                         logs = self._get('/api/logs')
@@ -136,13 +137,22 @@ class CoordinatorThread(QThread):
                     except Exception as e:
                         self.error.emit(str(e))
 
-            next_turn = arena.get('nextTurnIn', 0.7)
+            # 3. КЛЮЧЕВОЙ МОМЕНТ: спим до начала следующего хода + запас
+            next_turn_in = arena.get('nextTurnIn', 1.0)
             try:
-                next_turn = float(next_turn)
+                next_turn_in = float(next_turn_in)
             except Exception:
-                next_turn = 0.7
-            next_turn = max(0.0, next_turn)
-            time.sleep(max(0.05, next_turn - 0.05))
+                next_turn_in = 1.0
+
+            # Время, когда мы получили ответ
+            # Спим ровно next_turn_in + 0.05 секунд от МОМЕНТА ПОЛУЧЕНИЯ ОТВЕТА
+            sleep_time = next_turn_in + 0.05
+
+            # Вычитаем время, которое уже прошло с момента получения ответа
+            elapsed = time.monotonic() - request_end
+            actual_sleep = max(0.01, sleep_time - elapsed)
+
+            time.sleep(actual_sleep)
 
 
 class GameAPIWorker(QThread):
@@ -991,7 +1001,6 @@ class MainWindow(QMainWindow):
 
     def _schedule_next_fetch(self):
         return
-
 
     def update_plantations_table(self, plantations):
         self.plantations_table.setRowCount(len(plantations))
