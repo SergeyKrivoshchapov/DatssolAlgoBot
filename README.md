@@ -2,7 +2,7 @@
 
 A sophisticated game bot framework for the **DatsSol** strategy game, featuring an interactive PyQt6-based visualizer and an intelligent AI decision-making engine.
 
-## 🎮 Project Overview
+## Project Overview
 
 This project combines two key components:
 
@@ -13,7 +13,7 @@ The bot participates in a resource management and territory control game where p
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ### Core Components
 
@@ -124,51 +124,7 @@ The game features 8 upgradable technologies:
 - **Manhattan (L1 distance)**: For pathfinding and routing
 - **Bonus cells**: Every 7th grid position (7, 14, 21, ...) provides resource bonuses
 
----
-
-## 🚀 Usage
-
-### Starting the Visualizer
-
-```bash
-python main.py
-```
-
-1. Copy your game authentication token from DatsSol
-2. Paste into the "Токен" (Token) field
-3. Click "Подключиться" (Connect)
-4. Bot auto-launches in background; visualizer shows live updates
-
-### Running Bot Standalone
-
-```bash
-python bot.py <AUTH_TOKEN>
-```
-
-**Optional flags:**
-```bash
-python bot.py <TOKEN> --seed 42 --max-turn 500 --logs-every 10
-```
-
-| Flag | Purpose |
-|------|---------|
-| `--seed` | RNG seed for reproducible decisions |
-| `--max-turn` | Stop bot after N turns |
-| `--logs-every` | Fetch game logs every N turns |
-
-### Bot Integration Mode (stdin/stdout)
-
-The bot supports streaming mode for integration:
-
-```bash
-python bot.py "-"
-```
-
-Send arena JSON via stdin; bot outputs command JSON via stdout.
-
----
-
-## 🔧 Technical Details
+## Technical Details
 
 ### API Integration
 
@@ -195,26 +151,6 @@ Send arena JSON via stdin; bot outputs command JSON via stdout.
 - Synchronous polling loop with adaptive sleep scheduling
 - Timing precision: ±50ms relative to server turn deadline
 
-### Geometry Utilities
-
-```python
-# Chebyshev distance for action range
-dist = max(abs(x1-x2), abs(y1-y2))
-
-# Adjacent cells (4-connected)
-neighbors = [(x±1, y), (x, y±1)]
-
-# Bonus cell detection
-is_bonus = (x % 7 == 0) and (y % 7 == 0)
-
-# Range check (Chebyshev)
-in_range = (abs(x1-x2) <= r) and (abs(y1-y2) <= r)
-```
-
----
-
-## 📊 Strategy Analysis
-
 ### Strengths
 
 ✅ **Robust resource management** — Prioritizes construction completion to prevent loss  
@@ -222,109 +158,3 @@ in_range = (abs(x1-x2) <= r) and (abs(y1-y2) <= r)
 ✅ **Upgrade automation** — Intelligent tech progression  
 ✅ **Error recovery** — Graceful handling of API failures  
 
-### Limitations
-
-⚠️ **No enemy prediction** — Reactive only, doesn't anticipate opponent moves  
-⚠️ **Limited pathfinding** — All moves assume direct adjacency (action range)  
-⚠️ **Static priority order** — No dynamic strategy adjustment mid-game  
-⚠️ **Beaver AI** — Basic distance-based threat evaluation  
-
-### Future Improvements
-
-- [ ] BFS pathfinding for multi-step strategies
-- [ ] Enemy prediction model based on log history
-- [ ] Machine learning for upgrade prioritization
-- [ ] Procedural strategy templates (defensive, expansionist, tech-focused)
-- [ ] Multi-bot coordination system
-
----
-
-## 📦 Dependencies
-
-```python
-# API & HTTP
-requests>=2.28.0
-
-# GUI Framework
-PyQt6>=6.0.0
-
-# Standard Library (included)
-json, time, subprocess, threading, dataclasses
-```
-
-Install dependencies:
-```bash
-pip install requests PyQt6
-```
-
----
-
-## 🎓 Code Quality
-
-### Design Patterns Used
-
-- **Strategy Pattern** — Game state analysis and decision logic
-- **Builder Pattern** — Command validation and payload construction
-- **Observer Pattern** — PyQt signals for async communication
-- **Dataclass Pattern** — Immutable game entities (Plantation, Enemy, etc.)
-
-### Code Metrics
-
-| File | Lines | Classes | Functions |
-|------|-------|---------|-----------|
-| `bot.py` | 647 | 5 | 40+ |
-| `main.py` | 1132 | 5 | 60+ |
-
----
-
-## 📝 Example Output
-
-**Game Log Example:**
-```
-[2024-01-15 14:23:45] Plantation built at (23, 45)
-[2024-01-15 14:24:12] Construction in progress at (24, 45): 15/50
-[2024-01-15 14:24:40] Beaver defeated at (50, 30)
-[2024-01-15 14:25:08] Upgrade: signal_range → Level 2
-```
-
-**Bot Decision Log:**
-```
-Turn 142: 5 commands queued
-  → Complete construction at (24, 45)
-  → Repair main center HP 35→45
-  → Expand to (22, 45) [bonus cell]
-  → Attack beaver at (50, 30) HP 8/15
-  → Upgrade: signal_range
-```
-
----
-
-## 📄 License
-
-This project was created as part of a programming course assignment.
-
----
-
-## 👤 Author
-
-Sergey Krivoshchapov
-
-**Contact & Links:**  
-- GitHub: [SergeyKrivoshchapov](https://github.com/SergeyKrivoshchapov)
-- DatsSol Game: [games.datsteam.dev](https://games.datsteam.dev)
-
----
-
-## 🤝 Contributing
-
-Suggestions for improvements:
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-improvement`)
-3. Commit changes with descriptive messages
-4. Submit a pull request with detailed explanation
-
----
-
-**Last Updated:** January 2024  
-**Game Version:** DatsSol (Landscape Simulation)  
-**Python Version:** 3.10+
